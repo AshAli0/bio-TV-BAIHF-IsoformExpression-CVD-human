@@ -1,0 +1,11 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+/output
+/renv
+/data
+/code
+/gtex_enrich/renv
+/gtex_enrich/*.Rproj
+/gtex_enrich/.Rhistory

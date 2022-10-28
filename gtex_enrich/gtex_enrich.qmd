@@ -1,0 +1,271 @@
+---
+title: "gtex_enrich"
+---
+
+```{r, warning=FALSE, message=FALSE}
+renv::install("CePa")
+renv::install("bioc::Rgraphviz") # Dependency for CePa
+renv::install("bioc::graph") # dependency for Rgraphviz
+renv::install("tidyverse")
+renv::install("bioc::TissueEnrich")
+renv::install(c("bioc::biomaRt", "bioc::GenomicRanges"))
+
+```
+
+ß
+
+```{r, message=FALSE, warning=FALSE}
+library(CePa)
+# library(dplyr)
+# library(tidyr)
+library(tidyverse)
+library(TissueEnrich)
+library(biomaRt)
+library(GenomicRanges)
+library(data.table)
+
+
+```
+
+```{r}
+## Read the annotation data
+gtext_sample_anno <- fread("../data/GTEX/GTEx_Analysis_v8_Annotations_SampleAttributesDS.txt", sep = '\t') %>% as_tibble()
+gtext_sample_anno$tissue <- gtext_sample_anno$SMTSD %>% stringr::str_replace_all(pattern = " ", replacement = "") 
+
+## simplify annotation data 
+gtext_sample_anno <- gtext_sample_anno[,c("SAMPID", "tissue")]
+ samples_by_tissue <- split(gtext_sample_anno$SAMPID, gtext_sample_anno$tissue)
+
+## read the row data (first twi columns of the .gct file)
+row_anno <- fread("../data/GTEX/GTEx_Analysis_2017-06-05_v8_RSEMv1.3.0_transcript_tpm.gct", sep = '\t', skip = 2, header = TRUE, select = c("transcript_id", "gene_id"))
+tissues <-samples_by_tissue %>%  names() 
+
+## Initialize a matrix to fill median tpm
+median_tpm_by_tissus <- matrix(nrow = dim(row_anno), ncol =  length(tissues) , dimnames = list(row_anno$transcript_id, tissues ))
+
+##ISSUE remove the "Cells-Leukemiacellline(CML)" where sample IDs donot match the ggct file
+samples_by_tissue <- within(samples_by_tissue, remove("Cells-Leukemiacellline(CML)"))
+median_tpm_by_tissus <- median_tpm_by_tissus[, colnames(median_tpm_by_tissus)!="Cells-Leukemiacellline(CML)"] 
+tissues <-samples_by_tissue %>%  names() 
+
+
+## fill tpms with median values
+for (tissue in tissues) {
+ 
+  #print(tissue) 
+tpm_by_tissus <- fread("../data/GTEX/GTEx_Analysis_2017-06-05_v8_RSEMv1.3.0_transcript_tpm.gct", sep = '\t', skip = 2, header = TRUE, select = samples_by_tissue[[tissue]], nThread = 6 ) %>%  as.matrix()
+
+## ISSUE: some of the sample IDs in the list from sample annotations were not for 
+## The fread function read the remaiming samples
+## INVESTIGATE the reason for samples not found and whther it has implications 
+
+
+
+median_tpm_by_tissus[, tissue] <- rowMedians(tpm_by_tissus)
+rm(tpm_by_tissus)
+
+}
+
+## Save the output matrix
+saveRDS(median_tpm_by_tissus , "../data/GTEX/GTEx_Analysis_2017-06-05_v8_RSEMv1.3.0_transcript_Mediantpm.RDS")
+
+
+```
+
+```{r}
+## Save the output matrix
+median_tpm_by_tissus <- readRDS( "../data/GTEX/GTEx_Analysis_2017-06-05_v8_RSEMv1.3.0_transcript_Mediantpm.RDS")
+
+
+ 
+```
+
+```{r}
+
+transcripts <- rownames(median_tpm_by_tissus) %>%
+  gsub("\\.[0-9]+$", "", .)
+
+rownames(median_tpm_by_tissus) <- transcripts
+
+se_tr<-SummarizedExperiment(assays = SimpleList(median_tpm_by_tissus),
+rowData = row.names(median_tpm_by_tissus),colData = colnames(median_tpm_by_tissus))
+
+#tissue_specific_transcripts <- teGeneRetrieval(se_tr, foldChangeThreshold = 5, maxNumberOfTissues = 7, expressedGeneThreshold = 1)
+```
+
+```{r}
+## Check how many tracripts were found in the GTEX data 
+gene_list_1$ensembl_transcript_id %>% length()
+transcripts %>% length()
+intersect(gene_list_1$ensembl_transcript_id, transcripts) %>% length()
+```
+
+```{r}
+tissue_specific_transcripts_FC3 <- teGeneRetrieval(se_tr, foldChangeThreshold = 3, maxNumberOfTissues = 4, expressedGeneThreshold = 1)
+```
+
+```{r}
+
+
+## Retrieve the transcript Ids from mart for gene lists provided
+
+gene_list_1 <- readr::read_delim("../data/inhouse/gene_lits_full", delim = "\t", show_col_types = FALSE) %>% unlist()
+gene_list_2 <- readr::read_delim("../data/inhouse/endothelial_assay_list.txt", delim = "\t", show_col_types = FALSE) %>% unlist()
+
+
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+ensembl <- useDataset(dataset = "hsapiens_gene_ensembl", mart = ensembl)
+
+mart <- useEnsembl(biomart = "ensembl", 
+                     dataset = "hsapiens_gene_ensembl")
+
+
+
+
+
+## Retrieve the InterPro annotations fr protein classes 
+gene_list_interpro <- getBM(c("ensembl_gene_id","hgnc_symbol" , "gene_biotype", "interpro", "interpro_short_description", "interpro_description"), values = gene_list_1, filter = "hgnc_symbol", mart = ensembl)
+gene_list2_interpro <- getBM(c("ensembl_gene_id","hgnc_symbol" , "gene_biotype", "interpro", "interpro_short_description", "interpro_description"), values = gene_list_2, filter = "hgnc_symbol", mart = ensembl)
+
+gene_list_1 <- getBM(c("ensembl_gene_id","hgnc_symbol" , "transcript_start", "transcript_end", "ensembl_transcript_id", "gene_biotype", "transcript_biotype"),
+                     values = gene_list_1, filter = "hgnc_symbol", mart = ensembl)
+gene_list_2 <- getBM(c("ensembl_gene_id","hgnc_symbol", "transcript_start", "transcript_end", "ensembl_transcript_id", "gene_biotype", "transcript_biotype"),values = gene_list_2,filter = "hgnc_symbol", mart = ensembl)
+
+gs1 <- GeneSet(gene_list_1$ensembl_transcript_id, organism = "Homo Sapiens",
+               geneIdType =  ENSEMBLIdentifier()) ## Gene set with desired list of genes
+gs2 <- GeneSet(gene_list_2$ensembl_transcript_id, organism = "Homo Sapiens",
+               geneIdType =  ENSEMBLIdentifier()) ## Gene set with desired list of genes
+
+
+
+```
+
+### Get the transcript expressions
+
+```{r}
+transcripts_own <- c(gene_list_1$ensembl_transcript_id, gene_list_2$ensembl_transcript_id)
+
+transcripts_cmmn_1 <- intersect(gene_list_1$ensembl_transcript_id, transcripts)
+transcripts_cmmn_2 <- intersect(gene_list_2$ensembl_transcript_id, transcripts)
+
+exprsd_trnscrpts_lst_1 <- left_join(
+          data.frame(assays(se_tr[transcripts_cmmn_1,c("Heart-AtrialAppendage" , "Heart-LeftVentricle"   , "Artery-Aorta"  ,"Artery-Coronary" )])[[1]], check.names = TRUE)  %>% rownames_to_column(var = "transcript"),
+          gene_list_1 ,
+          by = c("transcript" = "ensembl_transcript_id"  )
+)
+
+exprsd_trnscrpts_lst_2 <- left_join(
+          data.frame(assays(se_tr[transcripts_cmmn_2,c("Heart-AtrialAppendage" , "Heart-LeftVentricle"   , "Artery-Aorta"  ,"Artery-Coronary" )])[[1]], check.names = TRUE)  %>% rownames_to_column(var = "transcript"),
+          gene_list_2 ,
+          by = c("transcript" = "ensembl_transcript_id"  )
+)
+
+
+openxlsx::write.xlsx(exprsd_trnscrpts_lst_1, file = "../output/expression_trnscrpts_lst_1_median.xlsx")
+openxlsx::write.xlsx(exprsd_trnscrpts_lst_2, file = "../output/expression_trnscrpts_lst_2_median.xlsx")
+```
+
+```{r}
+# gs1_enriched <- teEnrichmentCustom(inputGenes = gs1, tissueSpecificGenes = tissue_specific_transcripts,
+#   tissueSpecificGeneType = 2, multiHypoCorrection = TRUE,
+#   backgroundGenes = NULL)
+# gs1_enriched[[1]]
+# 
+# seEnrichmentOutput<-gs1_enriched[[1]]
+# 
+# enrichmentOutput<-setNames(data.frame(assay(seEnrichmentOutput),
+# 
+#                                       row.names = rowData(seEnrichmentOutput)[,1]),
+# 
+#                            colData(seEnrichmentOutput)[,1])
+# 
+# enrichmentOutput$Tissue<-row.names(enrichmentOutput)
+# 
+# View(enrichmentOutput)
+
+```
+
+```{r}
+# gs1_enhanced <- teEnrichmentCustom(inputGenes = gs1, tissueSpecificGenes = tissue_specific_transcripts,
+#   tissueSpecificGeneType = 3, multiHypoCorrection = TRUE,
+#   backgroundGenes = NULL)
+# 
+# gs1_group_enriched <- teEnrichmentCustom(inputGenes = gs1, tissueSpecificGenes = tissue_specific_transcripts,
+#   tissueSpecificGeneType = 4, multiHypoCorrection = TRUE,
+#   backgroundGenes = NULL)
+
+gs1_all <- teEnrichmentCustom(inputGenes = gs1, tissueSpecificGenes = tissue_specific_transcripts,
+  tissueSpecificGeneType = 1, multiHypoCorrection = TRUE,
+  backgroundGenes = NULL)
+
+gs1_all_3Fc <- teEnrichmentCustom(inputGenes = gs1, tissueSpecificGenes = tissue_specific_transcripts_FC3,
+  tissueSpecificGeneType = 1, multiHypoCorrection = TRUE,
+  backgroundGenes = NULL)
+
+
+gs2_all <- teEnrichmentCustom(inputGenes = gs2, tissueSpecificGenes = tissue_specific_transcripts,
+  tissueSpecificGeneType = 1, multiHypoCorrection = TRUE,
+  backgroundGenes = NULL)
+
+gs2_all_3Fc <- teEnrichmentCustom(inputGenes = gs2, tissueSpecificGenes = tissue_specific_transcripts_FC3,
+  tissueSpecificGeneType = 1, multiHypoCorrection = TRUE,
+  backgroundGenes = NULL)
+```
+
+## Extract transcript enrichment
+
+```{r}
+gs1_heart <- gs1_all[[2]][gs1_all[[2]] %>% names() %in%
+c("Heart-AtrialAppendage" , "Heart-LeftVentricle"   , "Artery-Aorta"  ,"Artery-Coronary" ) ]
+
+gs1_heart_3fc <- gs1_all_3Fc[[2]][gs1_all_3Fc[[2]] %>% names() %in%
+c("Heart-AtrialAppendage" , "Heart-LeftVentricle"   , "Artery-Aorta"  ,"Artery-Coronary" ) ]
+
+gs1_heart <- lapply(gs1_heart, function(x) {
+  left_join(data.frame(assays(x)[[1]]), gene_list_1, by = c("Gene" = "ensembl_transcript_id"))
+  }
+  )
+
+gs1_heart_3fc <- lapply(gs1_heart_3fc, function(x) {
+  left_join(data.frame(assays(x)[[1]]), gene_list_1, by = c("Gene" = "ensembl_transcript_id"))
+  }
+  )
+
+
+
+```
+
+```{r}
+gs2_heart <- gs1_all[[2]][gs2_all[[2]] %>% names() %in%
+c("Heart-AtrialAppendage" , "Heart-LeftVentricle"   , "Artery-Aorta"  ,"Artery-Coronary" ) ]
+
+gs2_heart_3fc <- gs2_all_3Fc[[2]][gs2_all_3Fc[[2]] %>% names() %in%
+c("Heart-AtrialAppendage" , "Heart-LeftVentricle"   , "Artery-Aorta"  ,"Artery-Coronary" ) ]
+
+gs2_heart <- lapply(gs2_heart, function(x) {
+  left_join(data.frame(assays(x)[[1]]), gene_list_2, by = c("Gene" = "ensembl_transcript_id"))
+  }
+  )
+
+gs2_heart_3fc <- lapply(gs2_heart_3fc, function(x) {
+  left_join(data.frame(assays(x)[[1]]), gene_list_2, by = c("Gene" = "ensembl_transcript_id"))
+  }
+  )
+```
+
+```{r}
+openxlsx::write.xlsx(gs1_heart, file = "../output/expressions_list_1_default.xlsx")
+openxlsx::write.xlsx(gs1_heart_3fc, file = "../output/expressions_list_1_relaxed.xlsx")
+openxlsx::write.xlsx(gs2_heart, file = "../output/expressions_list_2_default.xlsx")
+openxlsx::write.xlsx(gs2_heart_3fc, file = "../output/expressions_list_2_relaxed.xlsx")
+openxlsx::write.xlsx(gene_list_interpro, file = "../output/List_1_protein_class.xlsx")
+openxlsx::write.xlsx(gene_list2_interpro, file = "../output/List_2_protein_class_relaxed.xlsx")
+
+```
+
+```{r}
+rm(list =ls() )
+
+```
+
+### 
