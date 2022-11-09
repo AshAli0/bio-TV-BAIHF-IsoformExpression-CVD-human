@@ -1,5 +1,6 @@
 ---
 title: "gtex_enrich"
+author: "Ashfaq Ali"
 ---
 
 ```{r, warning=FALSE, message=FALSE}
@@ -24,6 +25,26 @@ library(data.table)
 
 
 ```
+
+## Description:
+
+The main aim of the projects was to identify transcripts enriched in the heart muscle and related tissues.
+
+The transcript level heart tissue data was downloaded from the GTEx portal and summarized to median values for each tissue. The median level data was then used to perform enrichment analyses.
+
+### Input:
+
+-   Gene list provided by Anders Lundin and Anna Walentinsson
+
+-   Transcript level TPM values from the GTEx portal
+
+### output:
+
+-   Output from the enrichment analyses from heart and related tissues.
+
+-   TPM values for transcripts from genes in the gene lists provided
+
+-   Protein annotations for functional class of proteins.
 
 ```{r}
 ## Read the annotation data
